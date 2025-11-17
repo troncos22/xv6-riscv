@@ -107,3 +107,25 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_settickets(void)
+{
+  int n;
+  struct proc *p = myproc();
+  
+  // Obtener el argumento (número de tickets)
+  argint(0, &n);
+  
+  // Validar: si n < 1, asignar 1 ticket como mínimo
+  if(n < 1) {
+    n = 1;
+  }
+  
+  // Asignar los tickets al proceso actual
+  acquire(&p->lock);
+  p->tickets = n;
+  release(&p->lock);
+  
+  return 0;
+}

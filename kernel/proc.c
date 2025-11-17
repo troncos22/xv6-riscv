@@ -146,6 +146,10 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+
+  p->tickets = 100;      // Todos los procesos comienzan con 100 tickets
+  p->run_slices = 0;     // Inicializar contador de ejecuciones en 0
+  
   return p;
 }
 
@@ -421,54 +425,97 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+// ============================================================================
+// LOTTERY SCHEDULING - Scheduler
+// ============================================================================
+// Per-CPU process scheduler.
+// Each CPU calls scheduler() after setting itself up.
+// Scheduler never returns.  It loops, doing:
+//  - choose a process to run using lottery scheduling
+//  - swtch to start running that process.
+//  - eventually that process transfers control
+//    via swtch back to the scheduler.
 void
 scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-
+  
   c->proc = 0;
   for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
+    // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    intr_off();
 
-    int found = 0;
+    // ========================================================================
+    // PASO 1: Calcular el total de tickets de procesos RUNNABLE
+    // ========================================================================
+    int total_tickets = 0;
+    
+    // Primera pasada: contar tickets totales
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+        total_tickets += p->tickets;
       }
       release(&p->lock);
     }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
+    
+    // Si no hay procesos RUNNABLE, continuar al siguiente ciclo
+    if(total_tickets == 0) {
+      continue;
+    }
+    
+    // ========================================================================
+    // PASO 2: Generar un número aleatorio entre 1 y total_tickets
+    // ========================================================================
+    // Usamos una función simple de generación de números pseudoaleatorios
+    // basada en el contador de ticks del sistema
+    int winner = 1 + (random() % total_tickets);
+    
+    // ========================================================================
+    // PASO 3: Buscar el proceso ganador
+    // ========================================================================
+    int accumulator = 0;
+    
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      
+      if(p->state == RUNNABLE) {
+        // Acumular los tickets del proceso actual
+        accumulator += p->tickets;
+        
+        // Si el acumulador alcanza o supera el número ganador,
+        // este proceso es el seleccionado
+        if(accumulator >= winner) {
+          // ================================================================
+          // PASO 4: Ejecutar el proceso seleccionado
+          // ================================================================
+          
+          // Cambiar estado a RUNNING
+          p->state = RUNNING;
+          
+          // Incrementar contador de ejecuciones (para contabilidad)
+          p->run_slices++;
+          
+          // Asignar el proceso al CPU
+          c->proc = p;
+          
+          // Cambiar contexto al proceso seleccionado
+          swtch(&c->context, &p->context);
+
+          // El proceso ha terminado su quantum o se bloqueó
+          c->proc = 0;
+          
+          release(&p->lock);
+          break;  // Salir del loop y comenzar una nueva lotería
+        }
+      }
+      
+      release(&p->lock);
     }
   }
 }
 
-// Switch to scheduler.  Must hold only p->lock
-// and have changed proc->state. Saves and restores
-// intena because intena is a property of this
-// kernel thread, not this CPU. It should
-// be proc->intena and proc->noff, but that would
-// break in the few places where a lock is held but
-// there's no process.
 void
 sched(void)
 {
@@ -659,6 +706,24 @@ either_copyin(void *dst, int user_src, uint64 src, uint64 len)
   }
 }
 
+
+
+static unsigned long random_seed = 1;
+
+unsigned long
+random(void)
+{
+  // Parámetros del LCG (mismos que glibc)
+  random_seed = random_seed * 1103515245 + 12345;
+  return (random_seed / 65536) % 32768;
+}
+
+// Función para sembrar el generador (llamar desde main)
+void
+random_init(unsigned long seed)
+{
+  random_seed = seed;
+}
 // Print a process listing to console.  For debugging.
 // Runs when user types ^P on console.
 // No lock to avoid wedging a stuck machine further.
@@ -677,14 +742,55 @@ procdump(void)
   char *state;
 
   printf("\n");
+  printf("=================================================================\n");
+  printf("           LOTTERY SCHEDULING - Process Status                  \n");
+  printf("=================================================================\n");
+  printf("\n");
+  
+  // Encabezado de la tabla
+  printf("+-----+----------------+--------+---------+------------+----------+\n");
+  printf("| PID |      Name      | State  | Tickets | Run Slices | Share    |\n");
+  printf("+-----+----------------+--------+---------+------------+----------+\n");
+  
+  // Calcular total de tickets y run_slices para porcentajes
+  int total_tickets = 0;
+  int total_slices = 0;
+  
+  for(p = proc; p < &proc[NPROC]; p++){
+    if(p->state != UNUSED) {
+      total_tickets += p->tickets;
+      total_slices += p->run_slices;
+    }
+  }
+  
+  // Imprimir información de cada proceso
   for(p = proc; p < &proc[NPROC]; p++){
     if(p->state == UNUSED)
       continue;
+      
     if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
       state = states[p->state];
     else
       state = "???";
-    printf("%d %s %s", p->pid, state, p->name);
-    printf("\n");
+    
+    // Calcular porcentaje teórico (basado en tickets)
+    int theoretical_pct = total_tickets > 0 ? 
+                           (100 * p->tickets) / total_tickets : 0;
+    
+    // Calcular porcentaje real (basado en run_slices)
+    int actual_pct = total_slices > 0 ? 
+                      (100 * p->run_slices) / total_slices : 0;
+    
+    printf("| %3d | %-14s | %-6s |  %5d  |   %6d   | %3d/%3d  |\n",
+           p->pid, p->name, state, p->tickets, p->run_slices,
+           theoretical_pct, actual_pct);
   }
+  
+  printf("+-----+----------------+--------+---------+------------+----------+\n");
+  printf("\nLeyenda: Share muestra Teorico/Real (en porcentaje)\n");
+  printf("Total tickets: %d | Total run slices: %d\n\n", 
+         total_tickets, total_slices);
 }
+// Print a process listing to console.  For debugging.
+// Runs when user types ^P on console.
+// No lock to avoid wedging a stuck machine further.
