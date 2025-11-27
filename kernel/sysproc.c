@@ -129,3 +129,33 @@ sys_settickets(void)
   
   return 0;
 }
+
+uint64
+sys_mrdprotect(void)
+{
+  uint64 addr;
+  int len;
+  struct proc *p = myproc();
+  
+  // Get arguments: address and number of pages
+  argaddr(0, &addr);
+  argint(1, &len);
+  
+  // Call the mrdprotect function from vm.c
+  return mrdprotect(p->pagetable, addr, len);
+}
+
+uint64
+sys_munrdprotect(void)
+{
+  uint64 addr;
+  int len;
+  struct proc *p = myproc();
+  
+  // Get arguments: address and number of pages
+  argaddr(0, &addr);
+  argint(1, &len);
+  
+  // Call the munrdprotect function from vm.c
+  return munrdprotect(p->pagetable, addr, len);
+}

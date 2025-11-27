@@ -484,3 +484,97 @@ ismapped(pagetable_t pagetable, uint64 va)
   }
   return 0;
 }
+
+// Remove read permission from a range of pages
+// addr must be page-aligned
+// len is the number of pages to protect
+// Returns 0 on success, -1 on error
+int
+mrdprotect(pagetable_t pagetable, uint64 addr, int len)
+{
+  pte_t *pte;
+  uint64 a;
+  
+  // Validate parameters
+  if((addr % PGSIZE) != 0)
+    return -1;
+  if(len <= 0)
+    return -1;
+  if(addr >= MAXVA)
+    return -1;
+    
+  // Process each page in the range
+  for(int i = 0; i < len; i++) {
+    a = addr + i * PGSIZE;
+    
+    // Check if address is in user space
+    if(a >= MAXVA)
+      return -1;
+      
+    // Get PTE for this page
+    pte = walk(pagetable, a, 0);
+    if(pte == 0)
+      return -1;
+      
+    // Check if page is valid and belongs to user
+    if((*pte & PTE_V) == 0)
+      return -1;
+    if((*pte & PTE_U) == 0)
+      return -1;
+      
+    // Clear the read bit while preserving other bits
+    *pte &= ~PTE_R;
+  }
+  
+  // Flush TLB to ensure changes take effect
+  sfence_vma();
+  
+  return 0;
+}
+
+// Restore read permission to a range of pages
+// addr must be page-aligned  
+// len is the number of pages to unprotect
+// Returns 0 on success, -1 on error
+int
+munrdprotect(pagetable_t pagetable, uint64 addr, int len)
+{
+  pte_t *pte;
+  uint64 a;
+  
+  // Validate parameters
+  if((addr % PGSIZE) != 0)
+    return -1;
+  if(len <= 0)
+    return -1;
+  if(addr >= MAXVA)
+    return -1;
+    
+  // Process each page in the range
+  for(int i = 0; i < len; i++) {
+    a = addr + i * PGSIZE;
+    
+    // Check if address is in user space
+    if(a >= MAXVA)
+      return -1;
+      
+    // Get PTE for this page
+    pte = walk(pagetable, a, 0);
+    if(pte == 0)
+      return -1;
+      
+    // Check if page is valid and belongs to user
+    if((*pte & PTE_V) == 0)
+      return -1;
+    if((*pte & PTE_U) == 0)
+      return -1;
+      
+    // Set the read bit while preserving other bits
+    *pte |= PTE_R;
+  }
+  
+  // Flush TLB to ensure changes take effect
+  sfence_vma();
+  
+  return 0;
+}

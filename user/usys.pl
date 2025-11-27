@@ -42,4 +42,6 @@ entry("getpid");
 entry("sbrk");
 entry("pause");
 entry("uptime");
-entry("settickets"); 
+entry("settickets");
+entry("mrdprotect");
+entry("munrdprotect"); 

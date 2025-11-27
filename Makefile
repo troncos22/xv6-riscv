@@ -145,6 +145,8 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_vaddr\
 	$U/_lottery_demo\
+	$U/_rdprotect_test\
+	$U/_rdprotect_test_extended\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
